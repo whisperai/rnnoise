@@ -538,7 +538,8 @@ int main(int argc, char **argv) {
   int vad_cnt=0;
   int gain_change_count=0;
   float speech_gain = 1, noise_gain = 1;
-  FILE *f1, *f2, *fout;
+  int num_frames=0;
+  FILE *f1, *f2;
   DenoiseState *st;
   DenoiseState *noise_state;
   DenoiseState *noisy;
@@ -546,12 +547,12 @@ int main(int argc, char **argv) {
   noise_state = rnnoise_create();
   noisy = rnnoise_create();
   if (argc!=4) {
-    fprintf(stderr, "usage: %s <speech> <noise> <output denoised>\n", argv[0]);
+    fprintf(stderr, "usage: %s <speech> <noise> <num_frames>\n", argv[0]);
     return 1;
   }
   f1 = fopen(argv[1], "r");
   f2 = fopen(argv[2], "r");
-  fout = fopen(argv[3], "w");
+  num_frames = atoi(argv[3]);
   for(i=0;i<150;i++) {
     short tmp[FRAME_SIZE];
     fread(tmp, sizeof(short), FRAME_SIZE, f2);
@@ -568,7 +569,7 @@ int main(int argc, char **argv) {
     float vad=0;
     float vad_prob;
     float E=0;
-    if (count==50000000) break;
+    if (count==num_frames) break;
     if (++gain_change_count > 2821) {
       speech_gain = pow(10., (-40+(rand()%60))/20.);
       noise_gain = pow(10., (-30+(rand()%50))/20.);
@@ -673,7 +674,6 @@ int main(int argc, char **argv) {
   fprintf(stderr, "matrix size: %d x %d\n", count, NB_FEATURES + 2*NB_BANDS + 1);
   fclose(f1);
   fclose(f2);
-  fclose(fout);
   return 0;
 }
 
