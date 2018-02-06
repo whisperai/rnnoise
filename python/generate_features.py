@@ -49,7 +49,6 @@ def get_features(speech_wav_path, noise_wav_path):
         features_out_path,
         num_frames,
     )
-    print(feature_arr)
     return feature_arr
 
 def get_args():
