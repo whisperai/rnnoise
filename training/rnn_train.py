@@ -2,6 +2,8 @@
 
 from __future__ import print_function
 
+import argparse
+
 import keras
 from keras.models import Sequential
 from keras.models import Model
@@ -56,7 +58,13 @@ class WeightClip(Constraint):
         return {'name': self.__class__.__name__,
             'c': self.c}
 
+parser = argparse.ArgumentParser()
+parser.add_argument('h5_in', help='hdf5 input features created from generate_features.py')
+parser.add_argument('--batch_size', default=32, type=int)
+args = parser.parse_args()
+
 reg = 0.000001
+# NOTE(emmett): this clip is for better quantization performance
 constraint = WeightClip(0.499)
 
 print('Build model...')
@@ -79,10 +87,10 @@ model.compile(loss=[mycost, my_crossentropy],
               optimizer='adam', loss_weights=[10, 0.5])
 
 
-batch_size = 32
+batch_size = args.batch_size
 
 print('Loading data...')
-with h5py.File('denoise_data9.h5', 'r') as hf:
+with h5py.File(args.h5_in, 'r') as hf:
     all_data = hf['data'][:]
 print('done.')
 
