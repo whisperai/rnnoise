@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 
+import tensorflow as tf
 import keras
 from keras.models import Sequential
 from keras.models import Model
@@ -21,6 +22,7 @@ import h5py
 
 from keras.constraints import Constraint
 from keras import backend as K
+from keras.utils import multi_gpu_model
 import numpy as np
 
 #import tensorflow as tf
@@ -61,6 +63,7 @@ class WeightClip(Constraint):
 parser = argparse.ArgumentParser()
 parser.add_argument('h5_in', help='hdf5 input features created from generate_features.py')
 parser.add_argument('--batch_size', default=32, type=int)
+parser.add_argument('--n_gpus', default=1, type=int, help='Number of GPUs to train on.')
 args = parser.parse_args()
 
 reg = 0.000001
@@ -68,19 +71,35 @@ reg = 0.000001
 constraint = WeightClip(0.499)
 
 print('Build model...')
-main_input = Input(shape=(None, 42), name='main_input')
-tmp = Dense(24, activation='tanh', name='input_dense', kernel_constraint=constraint, bias_constraint=constraint)(main_input)
-vad_gru = GRU(24, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='vad_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(tmp)
-vad_output = Dense(1, activation='sigmoid', name='vad_output', kernel_constraint=constraint, bias_constraint=constraint)(vad_gru)
-noise_input = keras.layers.concatenate([tmp, vad_gru, main_input])
-noise_gru = GRU(48, activation='relu', recurrent_activation='sigmoid', return_sequences=True, name='noise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(noise_input)
-denoise_input = keras.layers.concatenate([vad_gru, noise_gru, main_input])
+def build_rnnoise_model():
+    main_input = Input(shape=(None, 42), name='main_input')
+    tmp = Dense(24, activation='tanh', name='input_dense', kernel_constraint=constraint, bias_constraint=constraint)(main_input)
+    vad_gru = GRU(24, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='vad_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(tmp)
+    vad_output = Dense(1, activation='sigmoid', name='vad_output', kernel_constraint=constraint, bias_constraint=constraint)(vad_gru)
+    noise_input = keras.layers.concatenate([tmp, vad_gru, main_input])
+    noise_gru = GRU(48, activation='relu', recurrent_activation='sigmoid', return_sequences=True, name='noise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(noise_input)
+    denoise_input = keras.layers.concatenate([vad_gru, noise_gru, main_input])
 
-denoise_gru = GRU(96, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='denoise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(denoise_input)
+    denoise_gru = GRU(96, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='denoise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(denoise_input)
 
-denoise_output = Dense(22, activation='sigmoid', name='denoise_output', kernel_constraint=constraint, bias_constraint=constraint)(denoise_gru)
+    denoise_output = Dense(22, activation='sigmoid', name='denoise_output', kernel_constraint=constraint, bias_constraint=constraint)(denoise_gru)
 
-model = Model(inputs=main_input, outputs=[denoise_output, vad_output])
+    model = Model(inputs=main_input, outputs=[denoise_output, vad_output])
+    
+    return model
+
+if args.n_gpus > 1:
+    # Instantiate the base model (or "template" model).
+    # We recommend doing this with under a CPU device scope,
+    # so that the model's weights are hosted on CPU memory.
+    # Otherwise they may end up hosted on a GPU, which would
+    # complicate weight sharing.
+    with tf.device('/cpu:0'):
+        model = build_rnnoise_model()
+    model = multi_gpu_model(model, gpus=args.n_gpus)
+else:
+    model = build_rnnoise_model()
+
 
 model.compile(loss=[mycost, my_crossentropy],
               metrics=[msse],
