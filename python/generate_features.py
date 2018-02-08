@@ -102,7 +102,7 @@ def get_features(speech_wav_dir, noise_wav_dir):
     assert len(speech.shape) == 1, 'Only mono audio supported not {}'.format(speech.shape)
     assert len(noise.shape) == 1, 'Only mono audio supported not {}'.format(noise.shape)
 
-    num_frames = speech.shape[0] / FRAME_SIZE
+    num_frames = noise.shape[0] / FRAME_SIZE
     print("Generating features for {} frames".format(num_frames))
     feature_arr = run_rnnoise_feature_binary(
         speech_out_path,

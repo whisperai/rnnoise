@@ -1,0 +1,11 @@
+*.o
+*.lo
+bin
+*.h5
+*.pc
+*.wav
+*.bin
+*.swp
+*.pyc
+*.hdf5
+

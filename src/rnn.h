@@ -31,7 +31,7 @@
 
 #define WEIGHTS_SCALE (1.f/256)
 
-#define MAX_NEURONS 128
+#define MAX_NEURONS 1024
 
 #define ACTIVATION_TANH    0
 #define ACTIVATION_SIGMOID 1

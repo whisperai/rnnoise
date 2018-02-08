@@ -74,13 +74,13 @@ print('Build model...')
 def build_rnnoise_model():
     main_input = Input(shape=(None, 42), name='main_input')
     tmp = Dense(24, activation='tanh', name='input_dense', kernel_constraint=constraint, bias_constraint=constraint)(main_input)
-    vad_gru = GRU(24, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='vad_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(tmp)
+    vad_gru = GRU(128, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='vad_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(tmp)
     vad_output = Dense(1, activation='sigmoid', name='vad_output', kernel_constraint=constraint, bias_constraint=constraint)(vad_gru)
     noise_input = keras.layers.concatenate([tmp, vad_gru, main_input])
-    noise_gru = GRU(48, activation='relu', recurrent_activation='sigmoid', return_sequences=True, name='noise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(noise_input)
+    noise_gru = GRU(512, activation='relu', recurrent_activation='sigmoid', return_sequences=True, name='noise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(noise_input)
     denoise_input = keras.layers.concatenate([vad_gru, noise_gru, main_input])
 
-    denoise_gru = GRU(96, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='denoise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(denoise_input)
+    denoise_gru = GRU(512, activation='tanh', recurrent_activation='sigmoid', return_sequences=True, name='denoise_gru', kernel_regularizer=regularizers.l2(reg), recurrent_regularizer=regularizers.l2(reg), kernel_constraint=constraint, recurrent_constraint=constraint, bias_constraint=constraint)(denoise_input)
 
     denoise_output = Dense(22, activation='sigmoid', name='denoise_output', kernel_constraint=constraint, bias_constraint=constraint)(denoise_gru)
 
@@ -136,8 +136,12 @@ all_data = 0;
 print(len(x_train), 'train sequences. x shape =', x_train.shape, 'y shape = ', y_train.shape)
 
 print('Train...')
-model.fit(x_train, [y_train, vad_train],
-          batch_size=batch_size,
-          epochs=120,
-          validation_split=0.1)
-model.save("newweights9i.hdf5")
+try:
+    model.fit(x_train, [y_train, vad_train],
+              batch_size=batch_size,
+              epochs=120,
+              validation_split=0.1)
+except KeyboardInterrupt:
+    print("Saving model ...")
+finally:
+    model.save("newweights9i.hdf5")

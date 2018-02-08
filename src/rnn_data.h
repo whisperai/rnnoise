@@ -8,13 +8,13 @@
 #define INPUT_DENSE_SIZE 24
 extern const DenseLayer input_dense;
 
-#define VAD_GRU_SIZE 24
+#define VAD_GRU_SIZE 128
 extern const GRULayer vad_gru;
 
-#define NOISE_GRU_SIZE 48
+#define NOISE_GRU_SIZE 512
 extern const GRULayer noise_gru;
 
-#define DENOISE_GRU_SIZE 96
+#define DENOISE_GRU_SIZE 512
 extern const GRULayer denoise_gru;
 
 #define DENOISE_OUTPUT_SIZE 22
