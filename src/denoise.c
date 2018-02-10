@@ -308,15 +308,25 @@ int band_lp = NB_BANDS;
 static void frame_analysis(DenoiseState *st, kiss_fft_cpx *X, float *Ex, const float *in) {
   int i;
   float x[WINDOW_SIZE];
+  // COPY FRAME_SIZE elements of st->analysis_mem to x
+  // my understanding is that st->analysis_mem is the previous frame
   RNN_COPY(x, st->analysis_mem, FRAME_SIZE);
+
+  // makes x an array of the past two frames of audio 
   for (i=0;i<FRAME_SIZE;i++) x[FRAME_SIZE + i] = in[i];
+  // copies current frame to st->analysis_mem
   RNN_COPY(st->analysis_mem, in, FRAME_SIZE);
+  //applies custom window function to two frames
   apply_window(x);
+  //stft of two windowed frames
   forward_transform(X, x);
 #if TRAINING
+  // this is so gross, lowpass is some global variable that
+  // determines how much of the signal to cut out
   for (i=lowpass;i<FREQ_SIZE;i++)
     X[i].r = X[i].i = 0;
 #endif
+  //Outputs band energies to Ex which is a NB_BANDS sized array
   compute_band_energy(Ex, X);
 }
 
@@ -335,53 +345,89 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   float tmp[NB_BANDS];
   float follow, logMax;
   frame_analysis(st, X, Ex, in);
+  //moves anything in the pitch buffer after FRAME_SIZE to start of pitch buffer
   RNN_MOVE(st->pitch_buf, &st->pitch_buf[FRAME_SIZE], PITCH_BUF_SIZE-FRAME_SIZE);
+  //copies input frame into the state pitch buffer after the left over stuff from above
   RNN_COPY(&st->pitch_buf[PITCH_BUF_SIZE-FRAME_SIZE], in, FRAME_SIZE);
+  // this is weird
   pre[0] = &st->pitch_buf[0];
+  // outputs downsampled pitch to pitch_buf
   pitch_downsample(pre, pitch_buf, PITCH_BUF_SIZE, 1);
+  // returns pitch_index
   pitch_search(pitch_buf+(PITCH_MAX_PERIOD>>1), pitch_buf, PITCH_FRAME_SIZE,
                PITCH_MAX_PERIOD-3*PITCH_MIN_PERIOD, &pitch_index);
   pitch_index = PITCH_MAX_PERIOD-pitch_index;
-
+  // as far as i can tell only changes pitch_index, pitch_buf and returns gain for use
+  // in next remove_doubling call
   gain = remove_doubling(pitch_buf, PITCH_MAX_PERIOD, PITCH_MIN_PERIOD,
           PITCH_FRAME_SIZE, &pitch_index, st->last_period, st->last_gain);
   st->last_period = pitch_index;
   st->last_gain = gain;
+  // copys WINDOW_SIZE worth of st->pitch_buf to p[i] starting from WINDOW_SIZE - pitch_index
+  // from the end
   for (i=0;i<WINDOW_SIZE;i++)
     p[i] = st->pitch_buf[PITCH_BUF_SIZE-WINDOW_SIZE-pitch_index+i];
+  // windows the two frames of pitch
   apply_window(p);
+  //stft
   forward_transform(P, p);
+  //outputs band_energy to Ep which is NB_BANDS sized
   compute_band_energy(Ep, P);
+  //computes xcorr between stft of input two frames
+  //and stft of two frames of pitch buffer
+  //outputs energy of xcorr to Exp which is of size 
+  //NB_BANDS
   compute_band_corr(Exp, X, P);
+  // normalizes by sqrt of product of input energy and pitch energy
   for (i=0;i<NB_BANDS;i++) Exp[i] = Exp[i]/sqrt(.001+Ex[i]*Ep[i]);
+  // tmp is dct of pitch correlations
   dct(tmp, Exp);
+  // adds first 6 dct coefficients of pitch correlations to
+  // features at positions 34 - 39.
   for (i=0;i<NB_DELTA_CEPS;i++) features[NB_BANDS+2*NB_DELTA_CEPS+i] = tmp[i];
+  // subtracts 1.3 from the first DCT coefficient of pitch correlation
   features[NB_BANDS+2*NB_DELTA_CEPS] -= 1.3;
+  // subtracts 0.9 from the seconds DCT coefficient of pitch correlation
   features[NB_BANDS+2*NB_DELTA_CEPS+1] -= 0.9;
+  // this is what he calls the pitch period in the paper
+  // but i don't understand this formula
   features[NB_BANDS+3*NB_DELTA_CEPS] = .01*(pitch_index-300);
   logMax = -2;
   follow = -2;
   for (i=0;i<NB_BANDS;i++) {
+    // Ly stores log of per band energy coefficients
     Ly[i] = log10(1e-2+Ex[i]);
+    // haven't really looked at what these transforms do
+    // but I think they are doing some form of clipping or
+    // smoothing or something
     Ly[i] = MAX16(logMax-7, MAX16(follow-1.5, Ly[i]));
     logMax = MAX16(logMax, Ly[i]);
     follow = MAX16(follow-1.5, Ly[i]);
+    // E is sum of per band energy coefficients
     E += Ex[i];
   }
   if (!TRAINING && E < 0.04) {
     /* If there's no audio, avoid messing up the state. */
+    // sets NB_FEATURES to all zeros if sum of energy is too small
     RNN_CLEAR(features, NB_FEATURES);
     return 1;
   }
+  // adds the first 22 MFCCs to features
   dct(features, Ly);
+  // subtracts 12 from the first MFCC
+  // subtracts 4 from the second MFCC
   features[0] -= 12;
   features[1] -= 4;
+  // keeps some memory of the 22 MFCCs around in order to take time differentials
   ceps_0 = st->cepstral_mem[st->memid];
   ceps_1 = (st->memid < 1) ? st->cepstral_mem[CEPS_MEM+st->memid-1] : st->cepstral_mem[st->memid-1];
   ceps_2 = (st->memid < 2) ? st->cepstral_mem[CEPS_MEM+st->memid-2] : st->cepstral_mem[st->memid-2];
+  // copies 22 MFCCs to memory for next time
   for (i=0;i<NB_BANDS;i++) ceps_0[i] = features[i];
   st->memid++;
   for (i=0;i<NB_DELTA_CEPS;i++) {
+    // seems like the first 6 MFCCs are the sum the MFCCs for the last two signals
+    // and the current one
     features[i] = ceps_0[i] + ceps_1[i] + ceps_2[i];
     features[NB_BANDS+i] = ceps_0[i] - ceps_2[i];
     features[NB_BANDS+NB_DELTA_CEPS+i] =  ceps_0[i] - 2*ceps_1[i] + ceps_2[i];
