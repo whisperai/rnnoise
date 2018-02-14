@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include "kiss_fft.h"
 #include "common.h"
 #include <math.h>
@@ -98,7 +99,7 @@ struct DenoiseState {
 };
 
 #if SMOOTH_BANDS
-void compute_band_energy(float *bandE, const kiss_fft_cpx *X) {
+	void compute_band_energy(float *bandE, const kiss_fft_cpx *X, bool print) {
   int i;
   float sum[NB_BANDS] = {0};
   for (i=0;i<NB_BANDS-1;i++)
@@ -109,6 +110,7 @@ void compute_band_energy(float *bandE, const kiss_fft_cpx *X) {
     for (j=0;j<band_size;j++) {
       float tmp;
       float frac = (float)j/band_size;
+
       tmp = SQUARE(X[(eband5ms[i]<<FRAME_SIZE_SHIFT) + j].r);
       tmp += SQUARE(X[(eband5ms[i]<<FRAME_SIZE_SHIFT) + j].i);
       sum[i] += (1-frac)*tmp;
@@ -120,6 +122,9 @@ void compute_band_energy(float *bandE, const kiss_fft_cpx *X) {
   for (i=0;i<NB_BANDS;i++)
   {
     bandE[i] = sum[i];
+      if (print){
+        //fprintf(stderr, "%f  ", bandE[i]);
+      }    
   }
 }
 
@@ -196,8 +201,10 @@ static void check_init() {
   int i;
   if (common.init) return;
   common.kfft = opus_fft_alloc_twiddles(2*FRAME_SIZE, NULL, NULL, NULL, 0);
-  for (i=0;i<FRAME_SIZE;i++)
+  for (i=0;i<FRAME_SIZE;i++) {
     common.half_window[i] = sin(.5*M_PI*sin(.5*M_PI*(i+.5)/FRAME_SIZE) * sin(.5*M_PI*(i+.5)/FRAME_SIZE));
+    fprintf(stderr, "%f \n", common.half_window[i]);
+  }
   for (i=0;i<NB_BANDS;i++) {
     int j;
     for (j=0;j<NB_BANDS;j++) {
@@ -305,7 +312,7 @@ int lowpass = FREQ_SIZE;
 int band_lp = NB_BANDS;
 #endif
 
-static void frame_analysis(DenoiseState *st, kiss_fft_cpx *X, float *Ex, const float *in) {
+static void frame_analysis(DenoiseState *st, kiss_fft_cpx *X, float *Ex, const float *in, bool print) {
   int i;
   float x[WINDOW_SIZE];
   // COPY FRAME_SIZE elements of st->analysis_mem to x
@@ -318,16 +325,16 @@ static void frame_analysis(DenoiseState *st, kiss_fft_cpx *X, float *Ex, const f
   RNN_COPY(st->analysis_mem, in, FRAME_SIZE);
   //applies custom window function to two frames
   apply_window(x);
-  //stft of two windowed frames
+  //stft of two windowed frames, X is of size FREQ_SIZE though
   forward_transform(X, x);
 #if TRAINING
   // this is so gross, lowpass is some global variable that
   // determines how much of the signal to cut out
-  for (i=lowpass;i<FREQ_SIZE;i++)
-    X[i].r = X[i].i = 0;
+  //for (i=lowpass;i<FREQ_SIZE;i++)
+  //  X[i].r = X[i].i = 0;
 #endif
-  //Outputs band energies to Ex which is a NB_BANDS sized array
-  compute_band_energy(Ex, X);
+#//Outputs band energies to Ex which is a NB_BANDS sized array
+  compute_band_energy(Ex, X, print);
 }
 
 static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cpx *P,
@@ -344,14 +351,24 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   float *(pre[1]);
   float tmp[NB_BANDS];
   float follow, logMax;
-  frame_analysis(st, X, Ex, in);
+  frame_analysis(st, X, Ex, in, true);
+  
+  float Xr[FREQ_SIZE], Xi[FREQ_SIZE];
+  for (i=0; i<FREQ_SIZE;i++) {
+      Xr[i] = X[i].r;
+      Xi[i] = X[i].i;
+      //fprintf(stderr, "%f,%f;  ", Xr[i], Xi[i]);
+  }
+  fwrite(Xr, sizeof(float), FREQ_SIZE, stdout);
+  fwrite(Xi, sizeof(float), FREQ_SIZE, stdout);
+  //fwrite(Ex, sizeof(float), NB_BANDS, stdout);
   //moves anything in the pitch buffer after FRAME_SIZE to start of pitch buffer
   RNN_MOVE(st->pitch_buf, &st->pitch_buf[FRAME_SIZE], PITCH_BUF_SIZE-FRAME_SIZE);
   //copies input frame into the state pitch buffer after the left over stuff from above
   RNN_COPY(&st->pitch_buf[PITCH_BUF_SIZE-FRAME_SIZE], in, FRAME_SIZE);
-  // this is weird
+  // this is odd
   pre[0] = &st->pitch_buf[0];
-  // outputs downsampled pitch to pitch_buf
+  // outputs downsampled pitch to pitch_buf and runs lpc on it
   pitch_downsample(pre, pitch_buf, PITCH_BUF_SIZE, 1);
   // returns pitch_index
   pitch_search(pitch_buf+(PITCH_MAX_PERIOD>>1), pitch_buf, PITCH_FRAME_SIZE,
@@ -372,7 +389,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   //stft
   forward_transform(P, p);
   //outputs band_energy to Ep which is NB_BANDS sized
-  compute_band_energy(Ep, P);
+  compute_band_energy(Ep, P, false);
   //computes xcorr between stft of input two frames
   //and stft of two frames of pitch buffer
   //outputs energy of xcorr to Exp which is of size 
@@ -401,7 +418,11 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
     // but I think they are doing some form of clipping or
     // smoothing or something
     Ly[i] = MAX16(logMax-7, MAX16(follow-1.5, Ly[i]));
+    // logMax is the running max of the log energy
     logMax = MAX16(logMax, Ly[i]);
+    // follow is almost the previous log energy except
+    // if the previous previous energy is more than 1.5
+    // more than than the previous energy and so on 
     follow = MAX16(follow-1.5, Ly[i]);
     // E is sum of per band energy coefficients
     E += Ex[i];
@@ -501,7 +522,7 @@ void pitch_filter(kiss_fft_cpx *X, const kiss_fft_cpx *P, const float *Ex, const
     X[i].i += rf[i]*P[i].i;
   }
   float newE[NB_BANDS];
-  compute_band_energy(newE, X);
+  compute_band_energy(newE, X, false);
   float norm[NB_BANDS];
   float normf[FREQ_SIZE]={0};
   for (i=0;i<NB_BANDS;i++) {
@@ -555,7 +576,7 @@ float rnnoise_process_frame(DenoiseState *st, float *out, const float *in) {
 #if TRAINING
 
 static float uni_rand() {
-  return rand()/(double)RAND_MAX-.5;
+  return 0.0; //rand()/(double)RAND_MAX-.5;
 }
 
 static void rand_resp(float *a, float *b) {
@@ -609,6 +630,7 @@ int main(int argc, char **argv) {
   while (1) {
     kiss_fft_cpx X[FREQ_SIZE], Y[FREQ_SIZE], N[FREQ_SIZE], P[WINDOW_SIZE];
     float Ex[NB_BANDS], Ey[NB_BANDS], En[NB_BANDS], Ep[NB_BANDS];
+    float Xi[FREQ_SIZE], Xr[FREQ_SIZE];
     float Exp[NB_BANDS];
     float Ln[NB_BANDS];
     float features[NB_FEATURES];
@@ -636,6 +658,8 @@ int main(int argc, char **argv) {
         }
       }
     }
+    speech_gain = 1;
+    noise_gain = 0;
     if (speech_gain != 0) {
       fread(tmp, sizeof(short), FRAME_SIZE, f1);
       if (feof(f1)) {
@@ -658,10 +682,10 @@ int main(int argc, char **argv) {
     } else {
       for (i=0;i<FRAME_SIZE;i++) n[i] = 0;
     }
-    biquad(x, mem_hp_x, x, b_hp, a_hp, FRAME_SIZE);
-    biquad(x, mem_resp_x, x, b_sig, a_sig, FRAME_SIZE);
-    biquad(n, mem_hp_n, n, b_hp, a_hp, FRAME_SIZE);
-    biquad(n, mem_resp_n, n, b_noise, a_noise, FRAME_SIZE);
+    //biquad(x, mem_hp_x, x, b_hp, a_hp, FRAME_SIZE);
+    //biquad(x, mem_resp_x, x, b_sig, a_sig, FRAME_SIZE);
+    //biquad(n, mem_hp_n, n, b_hp, a_hp, FRAME_SIZE);
+    //biquad(n, mem_resp_n, n, b_noise, a_noise, FRAME_SIZE);
     for (i=0;i<FRAME_SIZE;i++) xn[i] = x[i] + n[i];
     if (E > 1e9f) {
       vad_cnt=0;
@@ -679,10 +703,11 @@ int main(int argc, char **argv) {
     else if (vad_cnt > 0) vad = 0.5f;
     else vad = 1.f;
 
-    frame_analysis(st, Y, Ey, x);
-    frame_analysis(noise_state, N, En, n);
+    frame_analysis(st, Y, Ey, x, false);
+    frame_analysis(noise_state, N, En, n, false);
     for (i=0;i<NB_BANDS;i++) Ln[i] = log10(1e-2+En[i]);
     int silence = compute_frame_features(noisy, X, P, Ex, Ep, Exp, features, xn);
+    fwrite(xn, sizeof(float), FRAME_SIZE, stdout);
     pitch_filter(X, P, Ex, Ep, Exp, g);
     //printf("%f %d\n", noisy->last_gain, noisy->last_period);
     for (i=0;i<NB_BANDS;i++) {
@@ -702,9 +727,9 @@ int main(int argc, char **argv) {
     if (argc == 4){
 #if 1
     fwrite(features, sizeof(float), NB_FEATURES, stdout);
-    fwrite(g, sizeof(float), NB_BANDS, stdout);
-    fwrite(Ln, sizeof(float), NB_BANDS, stdout);
-    fwrite(&vad, sizeof(float), 1, stdout);
+    //fwrite(g, sizeof(float), NB_BANDS, stdout);
+    //fwrite(Ln, sizeof(float), NB_BANDS, stdout);
+    //fwrite(&vad, sizeof(float), 1, stdout);
 #endif
     }
     if (argc > 4){

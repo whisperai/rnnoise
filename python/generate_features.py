@@ -17,6 +17,7 @@ from whisper.signal.datatype import pcm_float_to_i16
 
 # FRAME_SIZE from RNNoise
 FRAME_SIZE = 480
+FREQ_SIZE = FRAME_SIZE + 1
 SAMPLE_RATE = 48000
 
 DENOISE_TRAINING_BIN = './bin/denoise_training'
@@ -68,14 +69,22 @@ def run_rnnoise_feature_binary(speech_path, noise_path, out_path, num_frames):
         speech_path,
         noise_path,
         str(num_frames),
+        #str(1),
     ]
     with open(out_path, 'wb') as f:
         subprocess.check_call(args, stdout=f)
 
     # 87 float32 features
-    dt = np.dtype("(87,)f4")
-    feature_arr = np.fromfile(out_path, dtype=dt)
-    return feature_arr
+    # plus a (FREQ_SIZE, 2) stft
+    dt = np.dtype("({},)f4".format(2*FREQ_SIZE + 480 + 42))
+    stdout_arr = np.fromfile(out_path, dtype=dt)
+    feature_arr = stdout_arr[:, 2*FREQ_SIZE+480:]
+    input_arr = stdout_arr[:, :2 * FREQ_SIZE]
+    extra_arr = stdout_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE+480]
+    #feature_arr, input_arr, extra_arr = feature_arr[:, 2*FREQ_SIZE + 22:], feature_arr[:, :2*FREQ_SIZE], feature_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE + 22]
+    input_arr = input_arr.reshape((-1, 2, FREQ_SIZE))
+    input_arr = np.transpose(input_arr, (0, 2, 1))
+    return feature_arr, input_arr, extra_arr
 
 def build_training_bin():
     print('Building training binary...')
@@ -104,13 +113,13 @@ def get_features(speech_wav_dir, noise_wav_dir):
 
     num_frames = speech.shape[0] / FRAME_SIZE
     print("Generating features for {} frames".format(num_frames))
-    feature_arr = run_rnnoise_feature_binary(
+    feature_arr, input_arr, extra_arr = run_rnnoise_feature_binary(
         speech_out_path,
         noise_out_path,
         features_out_path,
         num_frames,
     )
-    return feature_arr
+    return feature_arr, input_arr, extra_arr
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -121,13 +130,19 @@ def get_args():
 
 def main():
     args = get_args()
-    feat_arr = get_features(args.speech_dir, args.noise_dir)
-    print(feat_arr.shape)
+    feat_arr, input_arr, extra_arr = get_features(args.speech_dir, args.noise_dir)
+    print(extra_arr.shape)
 
     print('Creating h5 dataset...')
     h5f = h5py.File(args.h5_out, 'w')
     h5f.create_dataset('data', data=feat_arr)
     h5f.close()
+    h5f_input = h5py.File('stft_input.h5', 'w')
+    h5f_input.create_dataset('data', data=input_arr)
+    h5f_input.close()
+    h5f_extra = h5py.File('extra_data', 'w')
+    h5f_extra.create_dataset('data', data=extra_arr)
+    h5f_extra.close()
     print('Done!')
 
 

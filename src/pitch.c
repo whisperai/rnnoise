@@ -154,23 +154,26 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
    opus_val16 lpc[4], mem[5]={0,0,0,0,0};
    opus_val16 lpc2[5];
    opus_val16 c1 = QCONST16(.8f,15);
-#ifdef FIXED_POINT
-   int shift;
-   opus_val32 maxabs = celt_maxabs32(x[0], len);
-   if (C==2)
-   {
-      opus_val32 maxabs_1 = celt_maxabs32(x[1], len);
-      maxabs = MAX32(maxabs, maxabs_1);
-   }
-   if (maxabs<1)
-      maxabs=1;
-   shift = celt_ilog2(maxabs)-10;
-   if (shift<0)
-      shift=0;
-   if (C==2)
-      shift++;
-#endif
+//#ifdef FIXED_POINT
+//   int shift;
+//   opus_val32 maxabs = celt_maxabs32(x[0], len);
+//   if (C==2)
+//   {
+//      opus_val32 maxabs_1 = celt_maxabs32(x[1], len);
+//      maxabs = MAX32(maxabs, maxabs_1);
+//   }
+//   if (maxabs<1)
+//      maxabs=1;
+//   shift = celt_ilog2(maxabs)-10;
+//   if (shift<0)
+//      shift=0;
+//   if (C==2)
+//      shift++;
+//#endif
+   // len>>1 is half of PITCH_BUF_SIZE
    for (i=1;i<len>>1;i++)
+       // 0.5 * (0.5 * (x[0][2*i - 1] + x[0][2*i + 1]) + x[0][2*i])
+       // this is just a downsampling technique to cut the array in half
       x_lp[i] = SHR32(HALF32(HALF32(x[0][(2*i-1)]+x[0][(2*i+1)])+x[0][2*i]), shift);
    x_lp[0] = SHR32(HALF32(HALF32(x[0][1])+x[0][0]), shift);
    if (C==2)
@@ -257,12 +260,12 @@ void celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,
       xcorr[i+1]=sum[1];
       xcorr[i+2]=sum[2];
       xcorr[i+3]=sum[3];
-#ifdef FIXED_POINT
-      sum[0] = MAX32(sum[0], sum[1]);
-      sum[2] = MAX32(sum[2], sum[3]);
-      sum[0] = MAX32(sum[0], sum[2]);
-      maxcorr = MAX32(maxcorr, sum[0]);
-#endif
+//#ifdef FIXED_POINT
+//      sum[0] = MAX32(sum[0], sum[1]);
+//      sum[2] = MAX32(sum[2], sum[3]);
+//      sum[0] = MAX32(sum[0], sum[2]);
+//      maxcorr = MAX32(maxcorr, sum[0]);
+//#endif
    }
    /* In case max_pitch isn't a multiple of 4, do non-unrolled version. */
    for (;i<max_pitch;i++)
@@ -270,9 +273,9 @@ void celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,
       opus_val32 sum;
       sum = celt_inner_prod(_x, _y+i, len);
       xcorr[i] = sum;
-#ifdef FIXED_POINT
-      maxcorr = MAX32(maxcorr, sum);
-#endif
+//#ifdef FIXED_POINT
+//      maxcorr = MAX32(maxcorr, sum);
+//#endif
    }
 #ifdef FIXED_POINT
    return maxcorr;
@@ -286,11 +289,11 @@ void pitch_search(const opus_val16 *x_lp, opus_val16 *y,
    int i, j;
    int lag;
    int best_pitch[2]={0,0};
-#ifdef FIXED_POINT
-   opus_val32 maxcorr;
-   opus_val32 xmax, ymax;
-   int shift=0;
-#endif
+//#ifdef FIXED_POINT
+//   opus_val32 maxcorr;
+//   opus_val32 xmax, ymax;
+//   int shift=0;
+//#endif
    int offset;
 
    celt_assert(len>0);
@@ -307,62 +310,62 @@ void pitch_search(const opus_val16 *x_lp, opus_val16 *y,
    for (j=0;j<lag>>2;j++)
       y_lp4[j] = y[2*j];
 
-#ifdef FIXED_POINT
-   xmax = celt_maxabs16(x_lp4, len>>2);
-   ymax = celt_maxabs16(y_lp4, lag>>2);
-   shift = celt_ilog2(MAX32(1, MAX32(xmax, ymax)))-11;
-   if (shift>0)
-   {
-      for (j=0;j<len>>2;j++)
-         x_lp4[j] = SHR16(x_lp4[j], shift);
-      for (j=0;j<lag>>2;j++)
-         y_lp4[j] = SHR16(y_lp4[j], shift);
-      /* Use double the shift for a MAC */
-      shift *= 2;
-   } else {
-      shift = 0;
-   }
-#endif
+//#ifdef FIXED_POINT
+//   xmax = celt_maxabs16(x_lp4, len>>2);
+//   ymax = celt_maxabs16(y_lp4, lag>>2);
+//   shift = celt_ilog2(MAX32(1, MAX32(xmax, ymax)))-11;
+//   if (shift>0)
+//   {
+//      for (j=0;j<len>>2;j++)
+//         x_lp4[j] = SHR16(x_lp4[j], shift);
+//      for (j=0;j<lag>>2;j++)
+//         y_lp4[j] = SHR16(y_lp4[j], shift);
+//      /* Use double the shift for a MAC */
+//      shift *= 2;
+//   } else {
+//      shift = 0;
+//   }
+//#endif
 
    /* Coarse search with 4x decimation */
 
-#ifdef FIXED_POINT
-   maxcorr =
-#endif
+//#ifdef FIXED_POINT
+//   maxcorr =
+//#endif
    celt_pitch_xcorr(x_lp4, y_lp4, xcorr, len>>2, max_pitch>>2);
 
    find_best_pitch(xcorr, y_lp4, len>>2, max_pitch>>2, best_pitch
-#ifdef FIXED_POINT
-                   , 0, maxcorr
-#endif
+//#ifdef FIXED_POINT
+//                   , 0, maxcorr
+//#endif
                    );
 
    /* Finer search with 2x decimation */
-#ifdef FIXED_POINT
-   maxcorr=1;
-#endif
+//#ifdef FIXED_POINT
+//   maxcorr=1;
+//#endif
    for (i=0;i<max_pitch>>1;i++)
    {
       opus_val32 sum;
       xcorr[i] = 0;
       if (abs(i-2*best_pitch[0])>2 && abs(i-2*best_pitch[1])>2)
          continue;
-#ifdef FIXED_POINT
-      sum = 0;
-      for (j=0;j<len>>1;j++)
-         sum += SHR32(MULT16_16(x_lp[j],y[i+j]), shift);
-#else
+//#ifdef FIXED_POINT
+//      sum = 0;
+//      for (j=0;j<len>>1;j++)
+//         sum += SHR32(MULT16_16(x_lp[j],y[i+j]), shift);
+//#else
       sum = celt_inner_prod(x_lp, y+i, len>>1);
-#endif
+//#endif
       xcorr[i] = MAX32(-1, sum);
-#ifdef FIXED_POINT
-      maxcorr = MAX32(maxcorr, sum);
-#endif
+//#ifdef FIXED_POINT
+//      maxcorr = MAX32(maxcorr, sum);
+//#endif
    }
    find_best_pitch(xcorr, y, len>>1, max_pitch>>1, best_pitch
-#ifdef FIXED_POINT
-                   , shift+1, maxcorr
-#endif
+//#ifdef FIXED_POINT
+//                   , shift+1, maxcorr
+//#endif
                    );
 
    /* Refine by pseudo-interpolation */
