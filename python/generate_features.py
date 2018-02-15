@@ -49,7 +49,7 @@ def wav_dir_to_binary_file(dir_path, out_path, flatten_channels):
         # TODO(emmett): if we only add one channel we could stream out to disk rather than store
         # whole array in memory
 
-    random.shuffle(signal_parts)
+    #random.shuffle(signal_parts)
     maga_wav = np.concatenate(signal_parts)
     i16 = pcm_float_to_i16(maga_wav)
     i16.tofile(out_path)
@@ -81,7 +81,6 @@ def run_rnnoise_feature_binary(speech_path, noise_path, out_path, num_frames):
     feature_arr = stdout_arr[:, 2*FREQ_SIZE+480:]
     input_arr = stdout_arr[:, :2 * FREQ_SIZE]
     extra_arr = stdout_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE+480]
-    #feature_arr, input_arr, extra_arr = feature_arr[:, 2*FREQ_SIZE + 22:], feature_arr[:, :2*FREQ_SIZE], feature_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE + 22]
     input_arr = input_arr.reshape((-1, 2, FREQ_SIZE))
     input_arr = np.transpose(input_arr, (0, 2, 1))
     return feature_arr, input_arr, extra_arr

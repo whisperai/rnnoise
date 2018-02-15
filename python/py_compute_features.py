@@ -12,6 +12,8 @@ import numpy as np
 
 import whisper.utils as utils
 from whisper.signal.stft import stft
+from whisper.signal.datatype import pcm_float_to_i16, pcm_i16_to_float
+from whisper.viz.stft import plot_magnitude
 from custom_stft_window import VorbisWindowSTFTSettings
 
 BAND_FREQS = np.array([
@@ -188,20 +190,23 @@ def get_spectral_variability(cepstral_history_deque):
     '''Takes in a history of the last CEPS_MEM_SIZE frames' MFCCs
     outputs magic spectral variability
     '''
-    history_length = len(cepstral_history)
+    history_length = len(cepstral_history_deque)
     spec_variability = 0
     cepstral_history_arr = np.stack([cepstrum for cepstrum in cepstral_history_deque])
     for i in range(history_length):
         min_dist = 1e15
         for j in range(history_length):
             dist_sum = 0
-            for k in range(num_bands):
+            for k in range(NUM_BANDS):
                 pairwise_dist = cepstral_history_arr[i, k] - cepstral_history_arr[j, k]
                 dist_sum += pairwise_dist ** 2
             # ignore dist of 0 when i = j
             if j != i:
                 min_dist = min(min_dist, dist_sum)
         spec_variability += min_dist
+    spec_variability /= CEPS_MEM_SIZE
+    # Don't know what this constant means
+    spec_variability -= 2.1
     return spec_variability
 
 
@@ -210,12 +215,13 @@ def get_features_from_stfts(inputs):
     ceps_hist_1_deque = deque(maxlen=CEPS_MEM_SIZE)
     # history of cepstrums delayed by 2
     ceps_hist_2_deque = deque(maxlen=CEPS_MEM_SIZE)
-    ceps_hist_1_deque.append(np.zeros(inputs.shape[1]))
-    ceps_hist_2_deque.append(np.zeros(inputs.shape[1]))
-    features = np.zeros((inputs.shape[0], 34))
-    band_energies = np.zeros((inputs.shape[0], 22))
+    for i in range(CEPS_MEM_SIZE):
+        ceps_hist_1_deque.append(np.zeros(NUM_BANDS))
+        ceps_hist_2_deque.append(np.zeros(NUM_BANDS))
+    features = np.zeros((inputs.shape[0], 35))
+    band_energies = np.zeros((inputs.shape[0], NUM_BANDS))
     for i in range(inputs.shape[0]):
-        frame_feats, band_e = get_MFCC_and_derivatives(
+        mfccs, band_e = get_MFCC_and_derivatives(
                 inputs[i],
                 ceps_hist_1_deque,
                 ceps_hist_2_deque,
@@ -223,7 +229,8 @@ def get_features_from_stfts(inputs):
         #for x in inputs[i]:
         #    print("{},{};  ".format(x[0], x[1]), end="")
         #print()
-        features[i] = frame_feats
+        spec_var = get_spectral_variability(ceps_hist_1_deque)
+        features[i] = np.hstack([mfccs, spec_var])
         band_energies[i] = band_e
 
     return features, band_energies
@@ -242,19 +249,18 @@ if __name__ == '__main__':
     with h5py.File(args.input_h5, 'r') as hf:
         inputs = hf['data'][:]
     with h5py.File('extra_data', 'r') as hf:
-        actual_energies = hf['data'][:]
+        input_sequences = hf['data'][:]
     print('done.')
-    print(inputs.shape)
 
     signal, _ = utils.load_wav(os.path.expanduser("test_wavs/speech/dir0-head0-sample_31c15490b50150b5cc6957a6235fa2524be74d19.json.wav"))
+    flat_signal = pcm_float_to_i16(signal.flatten()).astype(np.float32) / 960.
     stft_settings = VorbisWindowSTFTSettings(sample_rate=48000, window_length=0.02, hop_length=0.01)
-    stft_frames = stft(signal[0], stft_settings)
+    stft_frames = stft(flat_signal, stft_settings)
     stft_frames_r = np.real(stft_frames[0])
     stft_frames_i = np.imag(stft_frames[0])
     stft_frames = np.stack([stft_frames_r, stft_frames_i], axis=-1)
-    print(stft_frames.shape)
+    stft_frames = stft_frames[:1314]
 
-    print(np.mean(np.square(inputs[10] - stft_frames[10])))
 
     print("Generating features in python")
     feats_py, energies = get_features_from_stfts(inputs)
@@ -266,8 +272,8 @@ if __name__ == '__main__':
         hf.create_dataset('data', data=feats_py)
     with h5py.File('energies.h5', 'w') as hf:
         hf.create_dataset('data', data=energies)
-    mse = np.mean(np.square(feats_py[0] - feats[0, :34]))
+    mse = np.mean(np.square(feats_py[:,-1] - feats[:, -1]))
     print("MSE: {}".format(mse))
-    print(feats_py)
-    print(feats[:, :34])
+    print(feats_py[:, -1])
+    print(feats[:, -1])
     #print("MSE energy: {}".format(mse_energy))
