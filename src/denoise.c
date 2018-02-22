@@ -372,6 +372,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   // returns pitch_index
   pitch_search(pitch_buf+(PITCH_MAX_PERIOD>>1), pitch_buf, PITCH_FRAME_SIZE,
                PITCH_MAX_PERIOD-3*PITCH_MIN_PERIOD, &pitch_index);
+  //fprintf(stderr, "%i\n", pitch_index);
   pitch_index = PITCH_MAX_PERIOD-pitch_index;
   // as far as i can tell only changes pitch_index, pitch_buf and returns gain for use
   // in next remove_doubling call
@@ -472,11 +473,11 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
         mindist = MIN32(mindist, dist);
     }
     spec_variability += mindist;
-    fprintf(stderr, "%f\n", mindist);
+    //fprintf(stderr, "%f\n", mindist);
   }
-  fprintf(stderr, "\n\n");
+  //fprintf(stderr, "\n\n");
   features[NB_BANDS+3*NB_DELTA_CEPS+1] = spec_variability/CEPS_MEM-2.1;
-  fprintf(stderr, "%f\n\n", features[NB_BANDS+3*NB_DELTA_CEPS+1]);
+  //fprintf(stderr, "%f\n\n", features[NB_BANDS+3*NB_DELTA_CEPS+1]);
   return TRAINING && E < 0.1;
 }
 

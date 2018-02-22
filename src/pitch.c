@@ -35,6 +35,9 @@
 #include "config.h"
 #endif
 
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
 #include "pitch.h"
 #include "common.h"
 //#include "modes.h"
@@ -183,6 +186,7 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
       x_lp[0] += SHR32(HALF32(HALF32(x[1][1])+x[1][0]), shift);
    }
 
+   //fprintf(stderr, "%f, %f, %f, %f, %f \n", x_lp[0], x_lp[1], x_lp[2], x_lp[3], x_lp[(len>>1) - 1]);
    _celt_autocorr(x_lp, ac, NULL, 0,
                   4, len>>1);
 
@@ -199,10 +203,11 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
 #ifdef FIXED_POINT
       ac[i] -= MULT16_32_Q15(2*i*i, ac[i]);
 #else
+      // I believe this is an approximation for the above gaussian window function
       ac[i] -= ac[i]*(.008f*i)*(.008f*i);
 #endif
    }
-
+   PRINT_FIRST_5(ac);
    _celt_lpc(lpc, ac, 4);
    for (i=0;i<4;i++)
    {

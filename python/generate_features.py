@@ -51,7 +51,7 @@ def wav_dir_to_binary_file(dir_path, out_path, flatten_channels):
 
     #random.shuffle(signal_parts)
     maga_wav = np.concatenate(signal_parts)
-    i16 = pcm_float_to_i16(maga_wav)
+    i16 = pcm_float_to_i16(maga_wav) / 10
     i16.tofile(out_path)
 
     return i16

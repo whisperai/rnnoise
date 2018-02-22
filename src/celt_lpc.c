@@ -29,6 +29,8 @@
 #include "config.h"
 #endif
 
+#include <stdlib.h>
+#include <stdio.h>
 #include "celt_lpc.h"
 #include "arch.h"
 #include "common.h"
@@ -247,6 +249,7 @@ int _celt_autocorr(
          shift = 0;
    }
 #endif
+   //PRINT_FIRST_5((xptr + n - 5));
    celt_pitch_xcorr(xptr, xptr, ac, fastN, lag+1);
    for (k=0;k<=lag;k++)
    {

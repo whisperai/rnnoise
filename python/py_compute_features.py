@@ -15,6 +15,7 @@ from whisper.signal.stft import stft
 from whisper.signal.datatype import pcm_float_to_i16, pcm_i16_to_float
 from whisper.viz.stft import plot_magnitude
 from custom_stft_window import VorbisWindowSTFTSettings
+from lpc import lpc
 
 BAND_FREQS = np.array([
     0, 200, 400, 600, 800, 1000,
@@ -37,15 +38,26 @@ SAMPLE_INDEX_OF_BAND = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 
 NUM_BANDS = BAND_FREQS.size
 CEPS_MEM_SIZE = 8
 FRAME_SIZE = 480
+WINDOW_SIZE = 2 * FRAME_SIZE
 NUM_DERIV_FEATS = 6
+NUM_PITCH_FEATS = 7
 
-NUM_DERIV_FEATS
+# not sure where this number comes from but its 16ms at 48khz
+# also could be 80% of the window size
+PITCH_MAX_PERIOD = 768
+# not sure where this number comes from but its 1.25ms at 48khz
+# also could be 6.25% of window size
+# or 1/4 of the 5ms that the banding is based off of
+PITCH_MIN_PERIOD = 60
+PITCH_BUF_SIZE = PITCH_MAX_PERIOD + WINDOW_SIZE
+PITCH_FILTER_ORDER = 4
+
 
 def compute_band_energy(stft_frame):
     '''Takes in stft (freq_size, 2) and outputs the per band
     energy of the stft as defined in RNNoise paper equation 2
     '''
-    band_energies = np.zeros(NUM_BANDS)
+    band_energies = np.zeros(NUM_BANDS, dtype=np.float32)
 
     for i in range(NUM_BANDS - 1):
         band_size = (SAMPLE_INDEX_OF_BAND[i + 1] - SAMPLE_INDEX_OF_BAND[i]) << 2
@@ -120,10 +132,10 @@ def freq_from_autocorr(sig, fs):
     # Should use a weighting function to de-emphasize the peaks at longer lags.
     # Also could zero-pad before doing circular autocorrelation.
     peak = np.argmax(corr[start:]) + start
+    #print(peak)
     px, py = parabolic(corr, peak)
 
     return fs / px
-
 
 def parabolic(f, x):
     """Quadratic interpolation for estimating the true position of an
@@ -148,7 +160,6 @@ def parabolic(f, x):
     xv = 1/2 * (f[x-1] - f[x+1]) / (f[x-1] - 2 * f[x] + f[x+1]) + x
     yv = f[x] - 1/4 * (f[x-1] - f[x+1]) * (xv - x)
     return (xv, yv)
-
 
 def get_MFCC_and_derivatives(
         stft_frame,
@@ -216,10 +227,10 @@ def get_features_from_stfts(inputs):
     # history of cepstrums delayed by 2
     ceps_hist_2_deque = deque(maxlen=CEPS_MEM_SIZE)
     for i in range(CEPS_MEM_SIZE):
-        ceps_hist_1_deque.append(np.zeros(NUM_BANDS))
-        ceps_hist_2_deque.append(np.zeros(NUM_BANDS))
-    features = np.zeros((inputs.shape[0], 35))
-    band_energies = np.zeros((inputs.shape[0], NUM_BANDS))
+        ceps_hist_1_deque.append(np.zeros(NUM_BANDS, dtype=np.float32))
+        ceps_hist_2_deque.append(np.zeros(NUM_BANDS, dtype=np.float32))
+    features = np.zeros((inputs.shape[0], 35), dtype=np.float32)
+    band_energies = np.zeros((inputs.shape[0], NUM_BANDS), dtype=np.float32)
     for i in range(inputs.shape[0]):
         mfccs, band_e = get_MFCC_and_derivatives(
                 inputs[i],
@@ -234,6 +245,180 @@ def get_features_from_stfts(inputs):
         band_energies[i] = band_e
 
     return features, band_energies
+
+def update_pitch_history(pitch_history, signal_in):
+    # copy history without first frame in history
+    pitch_history[:PITCH_BUF_SIZE - FRAME_SIZE] = pitch_history[FRAME_SIZE:]
+    pitch_history[PITCH_BUF_SIZE - FRAME_SIZE:] = signal_in
+
+
+def downsample_pitch_history(pitch_history):
+    pitch_buf = np.zeros(pitch_history.shape[0] // 2, dtype=np.float32)
+    for i in range(1, pitch_buf.shape[0]):
+        pitch_buf[i] = 0.5 * ( (0.5 * (pitch_history[2*i - 1] + pitch_history[2*i + 1])) + pitch_history[2*i])
+    pitch_buf[0] = 0.5 * ( 0.5 * pitch_history[1] + pitch_history[0])
+    return pitch_buf
+
+
+#def filter_pitch(pitch_buf, autocorr):
+
+
+def rnnoise_style_xcorr(a, b, max_pitch, length):
+    xcorr = np.zeros(max_pitch, dtype=np.float32)
+    for i in range(max_pitch):
+        xcorr[i] = a[:length].dot(b[i:length+i])
+    return xcorr
+
+
+def gaussian_lag_window(signal):
+    '''Exponential decay lag windowing
+    '''
+    n = signal.shape[0]
+    w = [1 - ((0.008 * i) ** 2) for i in range(n)]
+    for i in range(n):
+        signal[i] *= w[i]
+
+
+def compute_autocorr_and_lag_for_lpc(pitch_buf, order):
+    acorr = rnnoise_style_xcorr(pitch_buf, pitch_buf, order + 1, pitch_buf.shape[0] - order)
+    for k in range(order + 1):
+        d = 0
+        for i in range(pitch_buf.shape[0] - order + k, pitch_buf.shape[0]):
+            d += pitch_buf[i] * pitch_buf[i - k]
+        acorr[k] += d
+    # rnnoise code says that this enforces a noise floor of -40dB
+    acorr[0] *= 1.0001
+
+    gaussian_lag_window(acorr)
+    print(acorr[:5])
+    return acorr
+
+def find_best_pitch(xcorr, pitch_buf, max_pitch, length):
+    '''Returns the first and second best pitchs based on an argmax over k
+    of xcorr[k]**2 * ( 1 + \sum_i^n (y_i)^2 - \sum_i^k (y_i)^2 + \sum_{i=len}^{k+len} (y_i)^2)
+    Not quite this because for each k we take a max of the second term, call it Syy, and 1
+    There is another discrepancy because we accept a new best index,k, iff
+    xcorr[k]^2 * best_syy > best_square_xcorr * current_syy
+    haven't quite figured out what this^ is about yet
+    '''
+    #TODO(james): Come up with a more mathematical understanding of what this is doing
+    two_best_indices = [0, 1]
+    two_best_Syy = [0, 0]
+    two_best_square_xcorr = [-1, -1]
+    Syy = 1. + np.sum(np.square(pitch_buf[:length]))
+
+    for i in range(max_pitch):
+        if xcorr[i] > 0:
+            xcorr_sq = xcorr[i] ** 2
+            # check to see if this index is better than the second best one so far
+            if xcorr_sq * two_best_Syy[1] > two_best_square_xcorr[1] * Syy:
+                # if it is check to see if it is better than the best index
+                if xcorr_sq * two_best_Syy[0] > two_best_square_xcorr[0] * Syy:
+                    #best becomes second best
+                    two_best_indices[1] = two_best_indices[0]
+                    two_best_Syy[1] = two_best_Syy[0]
+                    two_best_square_xcorr[1]  = two_best_square_xcorr[0]
+
+                    two_best_indices[0] = i
+                    two_best_Syy[0] = Syy
+                    two_best_square_xcorr[0] = xcorr_sq
+                else:
+                    two_best_indices[1] = i
+                    two_best_Syy[1] = Syy
+                    two_best_square_xcorr[1] = xcorr_sq
+
+        Syy += pitch_buf[i + length] ** 2
+        Syy -= pitch_buf[i] ** 2
+        Syy = max(1., Syy)
+    return two_best_indices
+
+
+def coarse_search(pitch_buf, max_pitch, delay):
+    # use the first WINDOW_SIZE part of pitch_buf
+    # note that its divided by 4 because it has been downsampled by
+    # 2 twice now, also note the addition of max_pitch / 4, this is
+    # since the xcorr will search across all indices up to max_pitch / 4
+    # so the non-delayed version needs to be an extra max_pitch / 4 long
+    length = WINDOW_SIZE // 4
+    ds_pitch_buf = np.zeros(length + max_pitch // 4, dtype=np.float32)
+    ds_pitch_buf_delayed = np.zeros(length, dtype=np.float32)
+    # Downsample by 2x again
+    for i in range(ds_pitch_buf.shape[0]):
+        ds_pitch_buf[i] = pitch_buf[2*i]
+        if i < ds_pitch_buf_delayed.shape[0]:
+            ds_pitch_buf_delayed[i] = pitch_buf[2*i + delay]
+
+    xcorr = rnnoise_style_xcorr(
+            ds_pitch_buf_delayed,
+            ds_pitch_buf,
+            max_pitch // 4,
+            ds_pitch_buf_delayed.shape[0]
+    )
+    two_best_pitches = find_best_pitch(xcorr, ds_pitch_buf, max_pitch // 4, length)
+    return two_best_pitches
+
+def fine_search(pitch_buf, max_pitch, two_best_pitches, delay):
+    '''Finer search with only 2x downsampling
+    '''
+    xcorr = np.zeros(max_pitch // 2, dtype=np.float32)
+    length = WINDOW_SIZE // 2
+    pitch_buf_delayed = pitch_buf[delay:delay+length]
+    for i in range(xcorr.shape[0]):
+        # only search in a region that's within 2 indices either way of the best
+        # two pitches
+        if abs(i - 2 * two_best_pitches[0]) > 2 and abs(i - 2 * two_best_pitches[1]) > 2:
+            continue
+        xcorr[i] = pitch_buf_delayed.dot(pitch_buf[i:i+length])
+        # don't ask me why we do this clipping
+        xcorr[i] = max(-1., xcorr[i])
+
+    two_best_pitches = find_best_pitch(xcorr, pitch_buf, max_pitch // 2, length)
+    # pseudo interpolation of pitch indices
+    if two_best_pitches[0] > 0 and two_best_pitches[0] < (max_pitch // 2 - 1):
+        a = xcorr[two_best_pitches[0] - 1]
+        b = xcorr[two_best_pitches[0]]
+        c = xcorr[two_best_pitches[0] + 1]
+        # heuristic for interpolating
+        if (c - a) > 0.7 * (b - a):
+            offset = 1
+        elif (a - c) > 0.7 * (b - a):
+            offset = -1
+        else:
+            offset = 0
+    else:
+        offset = 0
+    return 2*two_best_pitches[0] - offset
+
+def pitch_search(pitch_buf):
+    max_pitch = PITCH_MAX_PERIOD - 3 * PITCH_MIN_PERIOD
+    delay = PITCH_MAX_PERIOD // 2
+    # coarse search first
+    two_best_pitches = coarse_search(pitch_buf, max_pitch, delay)
+    # then do fine search to find index
+    pitch_index = fine_search(pitch_buf, max_pitch, two_best_pitches, delay)
+    return pitch_index
+
+def compute_pitch_features(signal, stft_frames):
+    # stores signal history of size PITCH_BUF_SIZE
+    pitch_history = np.zeros((PITCH_BUF_SIZE,), dtype=np.float32)
+    num_frames = signal.shape[0] // FRAME_SIZE
+    pitch_features = np.zeros((num_frames, NUM_PITCH_FEATS), dtype=np.float32)
+
+    for i in range(num_frames):
+        frame = signal[i * FRAME_SIZE: (i + 1) * FRAME_SIZE]
+        update_pitch_history(pitch_history, frame)
+        #pitch_buf is downsampled version of pitch history of length PITCH_BUF_SIZE / 2
+        pitch_buf = downsample_pitch_history(pitch_history)
+        acorr = compute_autocorr_and_lag_for_lpc(pitch_buf, PITCH_FILTER_ORDER)
+        lpc_coeff = lpc(acorr, PITCH_FILTER_ORDER)
+        # FIR filter based on lpc coefficients
+        filtered_buf = scipy.signal.lfilter(lpc_coeff, [1.0], pitch_buf)
+        pitch_index = pitch_search(filtered_buf)
+        #print(pitch_index)
+
+
+
+
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -253,14 +438,17 @@ if __name__ == '__main__':
     print('done.')
 
     signal, _ = utils.load_wav(os.path.expanduser("test_wavs/speech/dir0-head0-sample_31c15490b50150b5cc6957a6235fa2524be74d19.json.wav"))
-    flat_signal = pcm_float_to_i16(signal.flatten()).astype(np.float32) / 960.
+    #for i in range(signal.shape[1] // 480):
+    #    pitch_freq = freq_from_autocorr(signal[0, i*480:(i+1)*480], 48000)
+    #    print(pitch_freq)
+    flat_signal = (pcm_float_to_i16(signal.flatten()) / 10).astype(np.float32) / 960.
     stft_settings = VorbisWindowSTFTSettings(sample_rate=48000, window_length=0.02, hop_length=0.01)
     stft_frames = stft(flat_signal, stft_settings)
     stft_frames_r = np.real(stft_frames[0])
     stft_frames_i = np.imag(stft_frames[0])
     stft_frames = np.stack([stft_frames_r, stft_frames_i], axis=-1)
     stft_frames = stft_frames[:1314]
-
+    compute_pitch_features(flat_signal * 960, stft_frames)
 
     print("Generating features in python")
     feats_py, energies = get_features_from_stfts(inputs)
