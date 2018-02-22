@@ -372,7 +372,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   // returns pitch_index
   pitch_search(pitch_buf+(PITCH_MAX_PERIOD>>1), pitch_buf, PITCH_FRAME_SIZE,
                PITCH_MAX_PERIOD-3*PITCH_MIN_PERIOD, &pitch_index);
-  //fprintf(stderr, "%i\n", pitch_index);
+  fprintf(stderr, "%i\n", pitch_index);
   pitch_index = PITCH_MAX_PERIOD-pitch_index;
   // as far as i can tell only changes pitch_index, pitch_buf and returns gain for use
   // in next remove_doubling call

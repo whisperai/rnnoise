@@ -219,9 +219,9 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
    lpc2[2] = lpc[2] + MULT16_16_Q15(c1,lpc[1]);
    lpc2[3] = lpc[3] + MULT16_16_Q15(c1,lpc[2]);
    lpc2[4] = MULT16_16_Q15(c1,lpc[3]);
-   PRINT_FIRST_5(lpc2);
+   //PRINT_FIRST_5(lpc2);
    celt_fir5(x_lp, lpc2, x_lp, len>>1, mem);
-   PRINT_FIRST_5((x_lp ));//+ (len>>1) - 5));
+   //PRINT_FIRST_5((x_lp ));//+ (len>>1) - 5));
 }
 
 void celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,

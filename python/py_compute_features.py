@@ -413,9 +413,9 @@ def compute_pitch_features(signal, stft_frames):
         # FIR filter based on lpc coefficients
         filtered_buf = scipy.signal.lfilter(lpc_coeff, [1], pitch_buf)
         #print(pitch_buf[:5])
-        print(filtered_buf[:5])
+        #print(filtered_buf[:5])
         pitch_index = pitch_search(filtered_buf)
-        #print(pitch_index)
+        print(pitch_index)
 
 
 
