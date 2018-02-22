@@ -45,5 +45,6 @@ static RNN_INLINE void rnnoise_free (void *ptr)
 
 #define PRINT_FIRST_5(src) (fprintf(stderr, "%f, %f, %f, %f, %f \n", src[0], src[1], src[2], src[3], src[4]))
 
+#define PRINT_FIRST_4(src) (fprintf(stderr, "%f, %f, %f, %f \n", src[0], src[1], src[2], src[3]))
 
 #endif

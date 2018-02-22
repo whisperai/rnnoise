@@ -290,7 +290,6 @@ def compute_autocorr_and_lag_for_lpc(pitch_buf, order):
     acorr[0] *= 1.0001
 
     gaussian_lag_window(acorr)
-    print(acorr[:5])
     return acorr
 
 def find_best_pitch(xcorr, pitch_buf, max_pitch, length):

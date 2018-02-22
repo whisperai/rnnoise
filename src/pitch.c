@@ -207,7 +207,6 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
       ac[i] -= ac[i]*(.008f*i)*(.008f*i);
 #endif
    }
-   PRINT_FIRST_5(ac);
    _celt_lpc(lpc, ac, 4);
    for (i=0;i<4;i++)
    {
@@ -220,6 +219,8 @@ void pitch_downsample(celt_sig *x[], opus_val16 *x_lp,
    lpc2[2] = lpc[2] + MULT16_16_Q15(c1,lpc[1]);
    lpc2[3] = lpc[3] + MULT16_16_Q15(c1,lpc[2]);
    lpc2[4] = MULT16_16_Q15(c1,lpc[3]);
+   fprintf(stderr, "%f\n",c1);
+   PRINT_FIRST_5(lpc2);
    celt_fir5(x_lp, lpc2, x_lp, len>>1, mem);
 }
 
