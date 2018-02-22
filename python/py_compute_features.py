@@ -411,7 +411,9 @@ def compute_pitch_features(signal, stft_frames):
         acorr = compute_autocorr_and_lag_for_lpc(pitch_buf, PITCH_FILTER_ORDER)
         lpc_coeff = lpc(acorr, PITCH_FILTER_ORDER)
         # FIR filter based on lpc coefficients
-        filtered_buf = scipy.signal.lfilter(lpc_coeff, [1.0], pitch_buf)
+        filtered_buf = scipy.signal.lfilter(lpc_coeff, [1], pitch_buf)
+        #print(pitch_buf[:5])
+        print(filtered_buf[:5])
         pitch_index = pitch_search(filtered_buf)
         #print(pitch_index)
 
@@ -449,18 +451,18 @@ if __name__ == '__main__':
     stft_frames = stft_frames[:1314]
     compute_pitch_features(flat_signal * 960, stft_frames)
 
-    print("Generating features in python")
-    feats_py, energies = get_features_from_stfts(inputs)
-    #feats_py, energies = get_features_from_stfts(stft_frames)
-    print('done.')
+    #print("Generating features in python")
+    #feats_py, energies = get_features_from_stfts(inputs)
+    ##feats_py, energies = get_features_from_stfts(stft_frames)
+    #print('done.')
 
 
-    with h5py.File('py_feats.h5', 'w') as hf:
-        hf.create_dataset('data', data=feats_py)
-    with h5py.File('energies.h5', 'w') as hf:
-        hf.create_dataset('data', data=energies)
-    mse = np.mean(np.square(feats_py[:,-1] - feats[:, -1]))
-    print("MSE: {}".format(mse))
-    print(feats_py[:, -1])
-    print(feats[:, -1])
-    #print("MSE energy: {}".format(mse_energy))
+    #with h5py.File('py_feats.h5', 'w') as hf:
+    #    hf.create_dataset('data', data=feats_py)
+    #with h5py.File('energies.h5', 'w') as hf:
+    #    hf.create_dataset('data', data=energies)
+    #mse = np.mean(np.square(feats_py[:,-1] - feats[:, -1]))
+    #print("MSE: {}".format(mse))
+    #print(feats_py[:, -1])
+    #print(feats[:, -1])
+    ##print("MSE energy: {}".format(mse_energy))
