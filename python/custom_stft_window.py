@@ -10,4 +10,5 @@ class VorbisWindowSTFTSettings(STFTSettings):
         n = np.arange(window_samples)
         w = np.sin((np.pi / 2) * np.square(np.sin((np.pi * (n + 0.5)) / window_samples)))
         return w
+        return np.ones(window_samples)
 

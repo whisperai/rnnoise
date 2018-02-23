@@ -76,13 +76,14 @@ def run_rnnoise_feature_binary(speech_path, noise_path, out_path, num_frames):
 
     # 87 float32 features
     # plus a (FREQ_SIZE, 2) stft
-    dt = np.dtype("({},)f4".format(2*FREQ_SIZE + 480 + 42))
+    dt = np.dtype("({},)f4".format(2*FREQ_SIZE + 42))
     stdout_arr = np.fromfile(out_path, dtype=dt)
-    feature_arr = stdout_arr[:, 2*FREQ_SIZE+480:]
+    feature_arr = stdout_arr[:, 2*FREQ_SIZE:]
     input_arr = stdout_arr[:, :2 * FREQ_SIZE]
-    extra_arr = stdout_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE+480]
+    #extra_arr = stdout_arr[:, 2*FREQ_SIZE:2*FREQ_SIZE+480]
     input_arr = input_arr.reshape((-1, 2, FREQ_SIZE))
     input_arr = np.transpose(input_arr, (0, 2, 1))
+    extra_arr = np.zeros(1)
     return feature_arr, input_arr, extra_arr
 
 def build_training_bin():

@@ -372,24 +372,28 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   // returns pitch_index
   pitch_search(pitch_buf+(PITCH_MAX_PERIOD>>1), pitch_buf, PITCH_FRAME_SIZE,
                PITCH_MAX_PERIOD-3*PITCH_MIN_PERIOD, &pitch_index);
-  fprintf(stderr, "%i\n", pitch_index);
   pitch_index = PITCH_MAX_PERIOD-pitch_index;
   // as far as i can tell only changes pitch_index, pitch_buf and returns gain for use
   // in next remove_doubling call
+  //PRINT_FIRST_5((pitch_buf + (PITCH_BUF_SIZE>>1) - 5));
   gain = remove_doubling(pitch_buf, PITCH_MAX_PERIOD, PITCH_MIN_PERIOD,
           PITCH_FRAME_SIZE, &pitch_index, st->last_period, st->last_gain);
+  //fprintf(stderr, "%i\n", pitch_index);
   st->last_period = pitch_index;
   st->last_gain = gain;
   // copys WINDOW_SIZE worth of st->pitch_buf to p[i] starting from WINDOW_SIZE - pitch_index
   // from the end
   for (i=0;i<WINDOW_SIZE;i++)
     p[i] = st->pitch_buf[PITCH_BUF_SIZE-WINDOW_SIZE-pitch_index+i];
+  //PRINT_FIRST_5((p + WINDOW_SIZE - 5));
   // windows the two frames of pitch
   apply_window(p);
   //stft
   forward_transform(P, p);
+  //PRINT_FIRST_5_i((X + FREQ_SIZE - 5));
   //outputs band_energy to Ep which is NB_BANDS sized
   compute_band_energy(Ep, P, false);
+  //PRINT_FIRST_5((Ep + NB_BANDS - 5));
   //computes xcorr between stft of input two frames
   //and stft of two frames of pitch buffer
   //outputs energy of xcorr to Exp which is of size 
@@ -406,6 +410,7 @@ static int compute_frame_features(DenoiseState *st, kiss_fft_cpx *X, kiss_fft_cp
   features[NB_BANDS+2*NB_DELTA_CEPS] -= 1.3;
   // subtracts 0.9 from the seconds DCT coefficient of pitch correlation
   features[NB_BANDS+2*NB_DELTA_CEPS+1] -= 0.9;
+  PRINT_FIRST_5((&features[NB_BANDS+2*NB_DELTA_CEPS]));
   // this is what he calls the pitch period in the paper
   // but i don't understand this formula
   features[NB_BANDS+3*NB_DELTA_CEPS] = .01*(pitch_index-300);
@@ -710,7 +715,7 @@ int main(int argc, char **argv) {
     frame_analysis(noise_state, N, En, n, false);
     for (i=0;i<NB_BANDS;i++) Ln[i] = log10(1e-2+En[i]);
     int silence = compute_frame_features(noisy, X, P, Ex, Ep, Exp, features, xn);
-    fwrite(xn, sizeof(float), FRAME_SIZE, stdout);
+    //fwrite(xn, sizeof(float), FRAME_SIZE, stdout);
     pitch_filter(X, P, Ex, Ep, Exp, g);
     //printf("%f %d\n", noisy->last_gain, noisy->last_period);
     for (i=0;i<NB_BANDS;i++) {
@@ -748,7 +753,7 @@ int main(int argc, char **argv) {
     frame_synthesis(noisy, xn, X);
 
     for (i=0;i<FRAME_SIZE;i++) tmp[i] = xn[i];
-    fwrite(tmp, sizeof(short), FRAME_SIZE, fout);
+    //fwrite(tmp, sizeof(short), FRAME_SIZE, fout);
 #endif
     }
   }

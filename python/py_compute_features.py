@@ -2,6 +2,7 @@ from __future__ import print_function
 import argparse
 from collections import deque
 import os
+import sys
 
 import h5py
 import scipy
@@ -41,6 +42,7 @@ FRAME_SIZE = 480
 WINDOW_SIZE = 2 * FRAME_SIZE
 NUM_DERIV_FEATS = 6
 NUM_PITCH_FEATS = 7
+NUM_FEATS = 1 + NUM_PITCH_FEATS + NUM_BANDS + 2 * NUM_DERIV_FEATS
 
 # not sure where this number comes from but its 16ms at 48khz
 # also could be 80% of the window size
@@ -86,6 +88,30 @@ def compute_band_energy(stft_frame):
     band_energies[0] *= 2
     band_energies[-1] *= 2
     return band_energies
+
+def compute_band_corr(stft_frame, pitch_stft_frame):
+    '''Takes in a stft and a pitch delayed stft and computes the per band
+    correlation of the two
+    See compute_band_energy for more documentation
+    '''
+    band_corrs = np.zeros(NUM_BANDS, dtype=np.float32)
+    for i in range(NUM_BANDS - 1):
+        band_size = (SAMPLE_INDEX_OF_BAND[i + 1] - SAMPLE_INDEX_OF_BAND[i]) << 2
+
+        for j in range(int(band_size)):
+            current_X = stft_frame[(SAMPLE_INDEX_OF_BAND[i]<<2) + j]
+            current_P = pitch_stft_frame[(SAMPLE_INDEX_OF_BAND[i]<<2) + j]
+            # sums real and imaginary components
+            freq_corr = np.sum(current_X * current_P)
+
+            triangle_resp_1 = float(j) / band_size
+            triangle_resp_0 = 1 - triangle_resp_1
+            band_corrs[i] += triangle_resp_0 * freq_corr
+            band_corrs[i + 1] += triangle_resp_1 * freq_corr
+
+    band_corrs[0] *= 2
+    band_corrs[-1] *= 2
+    return band_corrs
 
 def compute_log_energies(band_energies):
     #TODO(james): figure out what all these constants do
@@ -221,7 +247,11 @@ def get_spectral_variability(cepstral_history_deque):
     return spec_variability
 
 
-def get_features_from_stfts(inputs):
+def get_features(stfts, signal):
+    # stores signal history of size PITCH_BUF_SIZE
+    pitch_history = np.zeros((PITCH_BUF_SIZE,), dtype=np.float32)
+    prev_pitch_index = 0
+    prev_pitch_gain = 0
     # history of cepstrums
     ceps_hist_1_deque = deque(maxlen=CEPS_MEM_SIZE)
     # history of cepstrums delayed by 2
@@ -229,19 +259,25 @@ def get_features_from_stfts(inputs):
     for i in range(CEPS_MEM_SIZE):
         ceps_hist_1_deque.append(np.zeros(NUM_BANDS, dtype=np.float32))
         ceps_hist_2_deque.append(np.zeros(NUM_BANDS, dtype=np.float32))
-    features = np.zeros((inputs.shape[0], 35), dtype=np.float32)
-    band_energies = np.zeros((inputs.shape[0], NUM_BANDS), dtype=np.float32)
-    for i in range(inputs.shape[0]):
+    features = np.zeros((stfts.shape[0], NUM_FEATS), dtype=np.float32)
+    band_energies = np.zeros((stfts.shape[0], NUM_BANDS), dtype=np.float32)
+    for i in range(stfts.shape[0]):
         mfccs, band_e = get_MFCC_and_derivatives(
-                inputs[i],
+                stfts[i],
                 ceps_hist_1_deque,
                 ceps_hist_2_deque,
         )
-        #for x in inputs[i]:
-        #    print("{},{};  ".format(x[0], x[1]), end="")
-        #print()
+        pitch_features, prev_pitch_index, prev_pitch_gain = compute_pitch_feats_for_frame(
+                stfts[i],
+                signal[i * FRAME_SIZE: (i + 1) * FRAME_SIZE],
+                band_e,
+                pitch_history,
+                prev_pitch_index,
+                prev_pitch_gain,
+        )
         spec_var = get_spectral_variability(ceps_hist_1_deque)
-        features[i] = np.hstack([mfccs, spec_var])
+
+        features[i] = np.hstack([mfccs, pitch_features, spec_var])
         band_energies[i] = band_e
 
     return features, band_energies
@@ -380,7 +416,7 @@ def fine_search(pitch_buf, max_pitch, two_best_pitches, delay):
         # heuristic for interpolating
         if (c - a) > 0.7 * (b - a):
             offset = 1
-        elif (a - c) > 0.7 * (b - a):
+        elif (a - c) > 0.7 * (b - c):
             offset = -1
         else:
             offset = 0
@@ -397,28 +433,180 @@ def pitch_search(pitch_buf):
     pitch_index = fine_search(pitch_buf, max_pitch, two_best_pitches, delay)
     return pitch_index
 
-def compute_pitch_features(signal, stft_frames):
-    # stores signal history of size PITCH_BUF_SIZE
-    pitch_history = np.zeros((PITCH_BUF_SIZE,), dtype=np.float32)
-    num_frames = signal.shape[0] // FRAME_SIZE
-    pitch_features = np.zeros((num_frames, NUM_PITCH_FEATS), dtype=np.float32)
+def compute_pitch_gain(xx, yy, xy):
+    return xy / np.sqrt(1 + xx * yy)
 
-    for i in range(num_frames):
-        frame = signal[i * FRAME_SIZE: (i + 1) * FRAME_SIZE]
-        update_pitch_history(pitch_history, frame)
-        #pitch_buf is downsampled version of pitch history of length PITCH_BUF_SIZE / 2
-        pitch_buf = downsample_pitch_history(pitch_history)
-        acorr = compute_autocorr_and_lag_for_lpc(pitch_buf, PITCH_FILTER_ORDER)
-        lpc_coeff = lpc(acorr, PITCH_FILTER_ORDER)
-        # FIR filter based on lpc coefficients
-        filtered_buf = scipy.signal.lfilter(lpc_coeff, [1], pitch_buf)
-        #print(pitch_buf[:5])
-        #print(filtered_buf[:5])
-        pitch_index = pitch_search(filtered_buf)
-        print(pitch_index)
+def remove_pitch_doubling(
+        pitch_buf,
+        current_pitch_ind,
+        prev_pitch_period,
+        prev_pitch_gain
+    ):
+    # account for using downsampled pitch buf
+    min_period = PITCH_MIN_PERIOD // 2
+    max_period = PITCH_MAX_PERIOD // 2
+    prev_pitch_period /= 2
+    prev_pitch_period = max_period - prev_pitch_period
+    length = WINDOW_SIZE // 2
+    T0 = max_period - (current_pitch_ind / 2)
+    best_T = T0
+
+    # from now on xx represents autocorr of pitch_buf delayed by max_period
+    # xy represents xcorr of pitch_buf delayed by max_period with pitch_buf delayed by current_pitch_ind
+    # yy_lookup[i] represents autocorr of pitch_buf delayed by i
+
+    yy_lookup = np.zeros(max_period + 1, dtype=np.float32)
+    x = pitch_buf[max_period:max_period + length]
+    xx = np.dot(x, x)
+    ind = max_period - T0
+    xy = np.dot(x, pitch_buf[ind:ind + length])
+    yy_lookup[0] = xx
+    for i in range(yy_lookup.shape[0] - 1):
+        ind = max_period - i
+        y = pitch_buf[ind:ind + length]
+        yy_lookup[i] = np.dot(y, y)
+        assert yy_lookup[i] >= 0
+    best_xy = xy
+    best_yy = yy_lookup[T0]
+    g0 = compute_pitch_gain(xx, best_yy, xy)
+    best_g = g0
+
+    #TODO(james): document this array
+    second_checks = [0, 0, 3, 2, 3, 2, 5, 2, 3, 2, 3, 2, 5]
+
+    #Test harmonics of pitch ind at T0 / k for k between 2 and 13 inclusive
+    # stop at 13 since max_period - 13 * min_period < 0
+    for k in range(2, 13):
+        # round T0 / k to nearest integer
+        T = int(round(float(T0) / k))
+        if T < min_period:
+            break
+
+        # search second period for each T
+        # second periods are chosen to give a good coverage across all fractions of T0.
+        # ^ this is my guess anyway
+        T_2 = int(round(float(T0) * second_checks[k] / k))
+        if T_2 > max_period:
+            T_2 = T0
+
+        ind = max_period - T
+        xy = np.dot(x, pitch_buf[ind: ind + length])
+        ind = max_period - T_2
+        xy2 = np.dot(x, pitch_buf[ind: ind + length])
+        xy_ave = (xy + xy2) / 2.
+        yy = yy_lookup[T]
+        yy2 = yy_lookup[T_2]
+        yy_ave = (yy + yy2) / 2.
+
+        g1 = compute_pitch_gain(xx, yy_ave, xy_ave)
+
+        if abs(T - prev_pitch_period) <= 1:
+            prev = prev_pitch_gain
+        elif abs(T - prev_pitch_period) <= 2 and 5 * k * k < T0:
+            prev = 0.5 * prev_pitch_gain
+        else:
+            prev = 0
+
+        thresh = max(0.3, 0.7 * g0 - prev)
+        if T < 3 * min_period:
+            thresh = max(0.4, 0.85 * g0 - prev)
+
+        if T < 2 * min_period:
+            thresh = max(0.5, 0.9 * g0 - prev)
+
+        if g1 > thresh:
+            best_xy = xy_ave
+            best_yy = yy_ave
+            best_T = T
+            best_g = g1
+
+    best_xy = max(0, best_xy)
+    if best_yy <= best_xy:
+        pitch_gain = 1
+    else:
+        pitch_gain = compute_pitch_gain(best_yy, best_yy, best_xy)
+    if pitch_gain > best_g:
+        pitch_gain = best_g
+
+    if best_T != 0 and best_T != max_period:
+        # check around best_T for better xcorr
+        xcorr = np.zeros(3)
+        #print(best_T)
+        for k in range(3):
+            ind = max_period - (best_T + k - 1)
+            xcorr[k] = np.dot(x, pitch_buf[ind: ind + length])
+
+        # do the same pseudo interpolation as with pitch search
+        if xcorr[2] - xcorr[0] > 0.7 * (xcorr[1] - xcorr[0]):
+            offset = 1
+        elif xcorr[0] - xcorr[2] > 0.7 * (xcorr[1] - xcorr[2]):
+            offset = -1
+        else:
+            offset = 0
+    else:
+        offset = 0
+    pitch_ind = 2 * best_T + offset
+
+    if pitch_ind < PITCH_MIN_PERIOD:
+        pitch_ind = PITCH_MIN_PERIOD
+
+    return PITCH_MAX_PERIOD - pitch_ind, pitch_gain
+
+def forward_stft(signal):
+    # for some reason he scales the signal down by 960 before putting it into the stft
+    scaled_signal = signal / 960.
+    stft_settings = VorbisWindowSTFTSettings(sample_rate=48000, window_length=0.02, hop_length=0.01)
+    stft_frames = stft(scaled_signal, stft_settings)
+    stft_frames_r = np.real(stft_frames[0])
+    # not sure why his i is -1 off of ours
+    stft_frames_i = np.imag(stft_frames[0]) * -1
+    stft_frames = np.stack([stft_frames_r, stft_frames_i], axis=-1)
+    return stft_frames
+
+def normalize_corr(pitch_corr, band_energy, pitch_energy):
+    epsilon = 0.001
+    return pitch_corr / np.sqrt(band_energy * pitch_energy + epsilon)
 
 
+def compute_pitch_feats_for_frame(
+        stft_frame,
+        signal_frame,
+        band_energies,
+        pitch_history,
+        prev_index,
+        prev_gain
+):
+    update_pitch_history(pitch_history, signal_frame)
+    #pitch_buf is downsampled version of pitch history of length PITCH_BUF_SIZE / 2
+    pitch_buf = downsample_pitch_history(pitch_history)
+    acorr = compute_autocorr_and_lag_for_lpc(pitch_buf, PITCH_FILTER_ORDER)
+    lpc_coeff = lpc(acorr, PITCH_FILTER_ORDER)
+    # FIR filter based on lpc coefficients
+    filtered_buf = scipy.signal.lfilter(lpc_coeff, [1], pitch_buf)
+    pitch_index = pitch_search(filtered_buf)
+    pitch_index, pitch_gain = remove_pitch_doubling(
+            filtered_buf,
+            pitch_index,
+            prev_index,
+            prev_gain
+    )
+    pitch_delayed_buf = pitch_history[pitch_index:pitch_index + WINDOW_SIZE]
+    pitch_stft = forward_stft(pitch_delayed_buf)
+    pitch_stft = pitch_stft[0]
+    pitch_energies = compute_band_energy(pitch_stft)
+    band_pitch_corr = compute_band_corr(stft_frame, pitch_stft)
+    normed_pitch_corr = normalize_corr(band_pitch_corr, band_energies, pitch_energies)
+    dct_pitch_corr = dct(normed_pitch_corr)
 
+    # random constant subtraction, not sure what it means
+    dct_pitch_corr[0] -= 1.3
+    dct_pitch_corr[1] -= 0.9
+    # no idea how this supposedly computes the pitch period
+    pitch_period_feat = 0.01 * (PITCH_MAX_PERIOD - pitch_index - 300)
+
+    feats = np.hstack([dct_pitch_corr[:NUM_PITCH_FEATS - 1], pitch_period_feat])
+
+    return feats, pitch_index, pitch_gain
 
 
 def get_args():
@@ -439,21 +627,11 @@ if __name__ == '__main__':
     print('done.')
 
     signal, _ = utils.load_wav(os.path.expanduser("test_wavs/speech/dir0-head0-sample_31c15490b50150b5cc6957a6235fa2524be74d19.json.wav"))
-    #for i in range(signal.shape[1] // 480):
-    #    pitch_freq = freq_from_autocorr(signal[0, i*480:(i+1)*480], 48000)
-    #    print(pitch_freq)
-    flat_signal = (pcm_float_to_i16(signal.flatten()) / 10).astype(np.float32) / 960.
-    stft_settings = VorbisWindowSTFTSettings(sample_rate=48000, window_length=0.02, hop_length=0.01)
-    stft_frames = stft(flat_signal, stft_settings)
-    stft_frames_r = np.real(stft_frames[0])
-    stft_frames_i = np.imag(stft_frames[0])
-    stft_frames = np.stack([stft_frames_r, stft_frames_i], axis=-1)
-    stft_frames = stft_frames[:1314]
-    compute_pitch_features(flat_signal * 960, stft_frames)
-
-    #print("Generating features in python")
+    flat_signal = (pcm_float_to_i16(signal.flatten()) / 10).astype(np.float32)
+    stft_frames = forward_stft(np.hstack([np.zeros(FRAME_SIZE), flat_signal]))
+    print("Generating features in python")
     #feats_py, energies = get_features_from_stfts(inputs)
-    ##feats_py, energies = get_features_from_stfts(stft_frames)
+    feats_py, energies = get_features(stft_frames, flat_signal)
     #print('done.')
 
 
@@ -461,8 +639,8 @@ if __name__ == '__main__':
     #    hf.create_dataset('data', data=feats_py)
     #with h5py.File('energies.h5', 'w') as hf:
     #    hf.create_dataset('data', data=energies)
-    #mse = np.mean(np.square(feats_py[:,-1] - feats[:, -1]))
-    #print("MSE: {}".format(mse))
+    mse = np.mean(np.square(feats_py - feats))
+    print("MSE: {}".format(mse), file=sys.stderr)
     #print(feats_py[:, -1])
     #print(feats[:, -1])
     ##print("MSE energy: {}".format(mse_energy))

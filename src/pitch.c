@@ -453,6 +453,7 @@ opus_val16 remove_doubling(opus_val16 *x, int maxperiod, int minperiod,
 
    T = T0 = *T0_;
    opus_val32 yy_lookup[maxperiod+1];
+   //PRINT_FIRST_5((x+N - 5));
    dual_inner_prod(x, x, x-T0, N, &xx, &xy);
    yy_lookup[0] = xx;
    yy=xx;
@@ -468,6 +469,9 @@ opus_val16 remove_doubling(opus_val16 *x, int maxperiod, int minperiod,
    /* Look for any pitch at T/k */
    for (k=2;k<=15;k++)
    {
+      if (k > 13){
+            fprintf(stderr, "This makes no sense");
+        }
       int T1, T1b;
       opus_val16 g1;
       opus_val16 cont=0;
