@@ -248,6 +248,7 @@ def get_spectral_variability(cepstral_history_deque):
 
 
 def get_features(stfts, signal):
+    assert stfts.shape[0] * FRAME_SIZE <= signal.shape[0]
     # stores signal history of size PITCH_BUF_SIZE
     pitch_history = np.zeros((PITCH_BUF_SIZE,), dtype=np.float32)
     prev_pitch_index = 0
@@ -556,7 +557,7 @@ def forward_stft(signal):
     # for some reason he scales the signal down by 960 before putting it into the stft
     scaled_signal = signal / 960.
     stft_settings = VorbisWindowSTFTSettings(sample_rate=48000, window_length=0.02, hop_length=0.01)
-    stft_frames = stft(scaled_signal, stft_settings)
+    stft_frames = stft(scaled_signal, stft_settings, center=False)
     stft_frames_r = np.real(stft_frames[0])
     # not sure why his i is -1 off of ours
     stft_frames_i = np.imag(stft_frames[0]) * -1
